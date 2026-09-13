@@ -6,7 +6,7 @@
   if (FF.commonLoaded) return;
   FF.commonLoaded = true;
 
-  FF.VERSION = '0.4.0';
+  FF.VERSION = '0.5.0';
   FF.adapters = [];
   FF.registerAdapter = (adapter) => FF.adapters.push(adapter);
 
@@ -15,6 +15,7 @@
     enabled: true,
     maskListings: true,       // blur probabilities on non-question pages (home, search, lists)
     reaskHours: 24,           // after a forecast or reveal, hide and ask again after N hours. 0 = every visit, -1 = stay revealed
+    topMassPct: 95,           // multi-outcome: you must price the market's top outcomes covering this much of its probability
     defaultResolveDays: 30,   // Fatebook resolveBy fallback when the market has no end date
     fatebookApiKey: '',
     fatebookTags: 'forecast-first',
@@ -89,7 +90,7 @@
     cleanTitle(s) {
       return String(s || '')
         .replace(/\s+/g, ' ')
-        .replace(/\s*[|·-]\s*(Polymarket|Kalshi|Metaculus).*$/i, '')
+        .replace(/\s*[|·-]\s*(Polymarket|Kalshi|Metaculus|Manifold).*$/i, '')
         .replace(/\s*(Trading Odds & Predictions|Odds & Predictions).*$/i, '')
         .trim();
     },
@@ -224,6 +225,7 @@
       timer = 0;
       if (!active || !document.body) return;
       const ranges = [];
+      const odo = [];
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
         acceptNode(n) {
           const p = n.parentElement;
@@ -255,6 +257,9 @@
             else r.setStart(node, 0);
             r.setEnd(node, d.length);
             ranges.push(r);
+            // Odometer-style displays (every digit is its own node): blank the whole container instead.
+            const par = node.parentElement;
+            if (/%/.test(d) && par && par.childNodes.length > 2 && par.textContent.length > 6 && /^[\d.,\s]+%$/.test(par.textContent)) odo.push(par);
           } else {
             TOKEN.lastIndex = 0;
             let m;
@@ -276,6 +281,8 @@
       }
       applyVeil();
       if (supported) {
+        for (const el of marked) el.removeAttribute('data-ff-mask');
+        marked.clear();
         CSS.highlights.set('ff-mask', new Highlight(...ranges));
       } else {
         for (const el of marked) el.removeAttribute('data-ff-mask');
@@ -285,6 +292,7 @@
           if (el && el.textContent.length < 40) { el.setAttribute('data-ff-mask', ''); marked.add(el); }
         }
       }
+      for (const el of odo) if (!marked.has(el)) { el.setAttribute('data-ff-mask', ''); marked.add(el); }
     }
     const schedule = () => { if (active && !timer) timer = setTimeout(scan, 80); };
 
@@ -456,6 +464,7 @@
     .ff-slot { position: absolute; z-index: 2; display: flex; align-items: center; gap: 3px; }
     .ff-slot input { flex: 1; min-width: 0; height: 100%; text-align: right; padding: 2px 8px; font-size: 14px; font-weight: 600; }
     .ff-slot .pct { color: var(--ff-muted); font-size: 13px; }
+    .ff-slot.req input { border-color: var(--ff-accent); box-shadow: 0 0 0 2px var(--ff-accent-soft); }
     .ff-hint { font-size: 12px; color: var(--ff-muted); white-space: nowrap; }
     .ff-sum { font-size: 12px; color: var(--ff-muted); font-variant-numeric: tabular-nums; }
     .ff-sum.over { color: #f87171; }
@@ -619,12 +628,24 @@
       const r = target.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) { slot.el.style.display = 'none'; return; }
       slot.el.style.display = '';
-      const w = Math.max(74, Math.min(120, r.width + 16));
-      const hgt = Math.max(30, Math.min(40, r.height + 4));
+      let w, hgt, left, top;
+      if (slot.kind === 'row') {          // no number and no price button in the row: its right edge
+        w = 84; hgt = Math.max(30, Math.min(40, r.height - 8));
+        left = r.right - w - 8; top = r.top + (r.height - hgt) / 2;
+      } else if (slot.kind === 'pill') {  // over the row's first price button, same footprint
+        w = Math.max(74, Math.min(140, r.width)); hgt = Math.max(30, Math.min(44, r.height));
+        left = r.left + (r.width - w) / 2; top = r.top + (r.height - hgt) / 2;
+      } else {                            // over the probability it replaces
+        w = Math.max(74, Math.min(120, r.width + 16)); hgt = Math.max(30, Math.min(40, r.height + 4));
+        left = r.left + r.width - w; top = r.top + (r.height - hgt) / 2;
+        // a number at the left of its row (Manifold) keeps its left edge instead of growing leftwards
+        const row = slot.row && slot.row.isConnected ? slot.row.getBoundingClientRect() : null;
+        if (row && r.left - row.left < row.width * 0.35) left = r.left;
+      }
       slot.el.style.width = w + 'px';
       slot.el.style.height = hgt + 'px';
-      slot.el.style.left = r.left + r.width - w - hr.left + 'px';   // right-align with the number it replaces
-      slot.el.style.top = r.top + (r.height - hgt) / 2 - hr.top + 'px';
+      slot.el.style.left = left - hr.left + 'px';
+      slot.el.style.top = top - hr.top + 'px';
       clipTo(slot.el, slot.el.getBoundingClientRect());
     }
     // Shrinks a region's rect so elements the adapter wants visible (volume, forecaster counts) stay
@@ -705,11 +726,14 @@
           if (!leaf) walk(k, depth + 1);
         }
       })(anchor, 0);
-      // Try the top row first, then the rows just below it (Polymarket's legend fills the first row).
-      for (let row = 0; row < 3; row++) {
-        const dy = inset + row * (hgt + 6);
+      // Try the top row first, then the rows just below it (Polymarket's legend fills the first row),
+      // then the bottom rows (Manifold's chart header is full, its x-axis row is not).
+      const offsets = [];
+      for (let row = 0; row < 3; row++) offsets.push(inset + row * (hgt + 6));
+      for (let row = 0; row < 2; row++) offsets.push(ar.height - inset - hgt - row * (hgt + 6));
+      for (const dy of offsets) {
         const top = ar.top + dy, bottom = top + hgt;
-        if (bottom > ar.bottom - inset) break;
+        if (dy < inset || bottom > ar.bottom - inset) continue;
         // Only things that really share the band count; a chart that merely touches it does not.
         const blockers = boxes.filter((r) => Math.min(r.bottom, bottom) - Math.max(r.top, top) >= Math.min(8, hgt / 3));
         let right = ar.right - inset;
@@ -787,7 +811,8 @@
       removeCover(target) { const el = covers.get(target); if (el) { el.remove(); covers.delete(target); } },
       coveredTargets: () => [...covers.keys()],
       // Inline input over the page element that shows an outcome's probability.
-      setSlot(target, key, name, value, onInput, onEnter) {
+      // meta: { kind: 'pct' | 'pill' | 'row', row, required }
+      setSlot(target, key, name, value, onInput, onEnter, meta = {}) {
         ensure();
         let slot = slots.get(target);
         if (!slot) {
@@ -801,10 +826,13 @@
           layer.appendChild(el);
           slot = { el, input, key, name };
           slots.set(target, slot);
-          tick();
         } else {
           slot.key = key; slot.name = name;
         }
+        slot.kind = meta.kind || 'pct';
+        slot.row = meta.row || null;
+        slot.el.classList.toggle('req', !!meta.required);
+        tick();
         return slot.input;
       },
       keepSlots(targets) {
@@ -864,43 +892,72 @@
   // Finds, for each outcome, the page element that displays its probability (e.g. "80%"),
   // so an input can be placed right there instead of re-listing the outcomes in a panel.
   const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  // Finds, for each outcome, its row on the page and the element the input should sit on: the row's
+  // probability display when there is one (a plain "22%" or an odometer of stacked digits), else the
+  // row's first price button, else the row itself (the input goes at its right edge).
   FF.findOutcomeSlots = (outcomes, exclude) => {
     const scope = document.querySelector('main') || document.body;
     if (!scope || !outcomes || outcomes.length < 2) return [];
     const names = outcomes.map((o) => ({ o, n: norm(o.name) })).filter((x) => x.n.length >= 2).sort((a, b) => b.n.length - a.n.length);
-    const PCT = /^(?:<\s*)?\d+(?:[.,]\d+)?\s?%$/;
-    const leaves = [];
+    const excluded = (el) => !!(exclude && exclude.some((x) => x && x.contains(el)));
+    const visible = (el) => { const r = el.getBoundingClientRect(); return r.width >= 8 && r.height >= 8; };
+    const PCTTEXT = /^(?:<\s*)?[\d.,\s]+%$/;
+    // 1. elements whose own text is an outcome name (or the name plus a little decoration)
+    const nameEls = [];
     const walker = document.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT, {
       acceptNode(el) {
         if (el.tagName === 'FF-ROOT' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'svg') return NodeFilter.FILTER_REJECT;
-        if (exclude && exclude.some((x) => x && x.contains(el))) return NodeFilter.FILTER_REJECT;
+        if (excluded(el)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
     let el;
     while ((el = walker.nextNode())) {
-      if (el.children.length) continue;
+      if (el.children.length > 2) continue;
       const t = el.textContent.trim();
-      if (!PCT.test(t)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 14 || r.height < 10) continue;
-      if (parseFloat(getComputedStyle(el).fontSize) < 13) continue;
-      leaves.push(el);
+      if (t.length < 2 || t.length > 80) continue;
+      const n = norm(t);
+      const hit = names.find((x) => n === x.n || (x.n.length >= 4 && n.includes(x.n) && n.length <= x.n.length + 12));
+      if (hit && visible(el)) nameEls.push({ el, hit });
     }
+    // 2. grow a name into its row: the largest ancestor that stays short and doesn't mention another outcome
+    const rowOf = (leaf, own) => {
+      let row = leaf;
+      for (let i = 0; i < 8; i++) {
+        const p = row.parentElement;
+        if (!p || p === scope || p === document.body) break;
+        if (p.getBoundingClientRect().height > 120) break;
+        const text = norm(p.textContent);
+        if (names.some((x) => x !== own && x.n.length >= 3 && !own.n.includes(x.n) && text.includes(x.n))) break;
+        row = p;
+      }
+      return row;
+    };
     const used = new Set();
     const out = [];
-    for (const leaf of leaves) {
-      let row = leaf.parentElement, hit = null;
-      for (let i = 0; i < 8 && row && row !== scope; i++, row = row.parentElement) {
-        // stop once the container spans several probability leaves — we've left the row
-        let count = 0;
-        for (const l of leaves) if (row.contains(l)) { count++; if (count > 1) break; }
-        if (count > 1) break;
-        const text = norm(row.textContent);
-        hit = names.find((x) => !used.has(x.o.key) && text.includes(x.n));
-        if (hit) break;
+    for (const { el: nameEl, hit } of nameEls) {
+      if (used.has(hit.o.key)) continue;
+      const row = rowOf(nameEl, hit);
+      if (row.getBoundingClientRect().width < 120) continue; // a chip or legend entry, not a row
+      let target = null, kind = 'row';
+      const cands = [...row.querySelectorAll('*')].filter((c) => c.tagName !== 'svg' && !c.contains(nameEl) && !excluded(c) && PCTTEXT.test(c.textContent.trim()));
+      const pctEl = cands.find((c) => !cands.some((d) => d !== c && c.contains(d))) || cands[0];
+      if (pctEl && visible(pctEl) && parseFloat(getComputedStyle(pctEl).fontSize) >= 12) { target = pctEl; kind = 'pct'; }
+      if (!target) {
+        const pill = [...row.querySelectorAll('button, [role="button"], [data-testid="price-pill"]')].find((b) => visible(b) && !b.contains(nameEl) && b.getBoundingClientRect().width >= 40);
+        if (pill) { target = pill; kind = 'pill'; }
       }
-      if (hit) { used.add(hit.o.key); out.push({ outcome: hit.o, target: leaf }); }
+      if (!target) target = row;
+      used.add(hit.o.key);
+      out.push({ outcome: hit.o, target, kind, row });
+    }
+    // Outcome rows live in one list. A name that also shows up in a comment or a trade feed makes a
+    // row somewhere else on the page, so keep only the biggest group of rows sharing a parent.
+    if (out.length > 1) {
+      const groups = new Map();
+      for (const x of out) { const k = x.row.parentElement; groups.set(k, (groups.get(k) || 0) + 1); }
+      const best = [...groups.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (best && best[1] >= 2) return out.filter((x) => x.row.parentElement === best[0]);
     }
     return out;
   };
@@ -912,9 +969,9 @@
     let rows = [];        // { name, key, input } (inputs living inside the panel)
     let freeText = null;
     let mode = '';        // 'binary' | 'multi' | 'inline' | 'free' | 'closed'
-    let inline = [];      // [{ outcome, target }] outcomes whose input sits on the page row
+    let inline = [];      // [{ outcome, target, kind, row }] outcomes whose input sits on the page row
     const remembered = new Map(); // outcome key -> typed value, survives re-renders
-    let sumEl = null;
+    let sumEl = null, moreEl = null;
 
     const numInput = () => h('input', { type: 'number', min: 0, max: 100, step: 'any', inputmode: 'decimal', 'aria-label': 'Your probability', oninput: syncButtons });
     const pct = (input) => h('span.ff-num', input, h('span.pct', { text: '%' }));
@@ -922,19 +979,57 @@
     const submitBtn = () => h('button.primary.ff-submit', { type: 'button', text: 'Submit', hidden: true, onclick: submit });
     const revealBtn = () => h('button.link', { type: 'button', text: 'Reveal', title: 'Show the page without forecasting', onclick: () => ctx.onSkip() });
     const status = h('span.ff-status');
+    const outs = () => (ctx.data && Array.isArray(ctx.data.outcomes) ? ctx.data.outcomes : []);
     const allInputs = () => rows.map((r) => ({ key: r.key, name: r.name, input: r.input })).concat(FF.ui.slotList());
+
+    // The outcomes you have to price: the market's likeliest ones until `topMassPct` of its probability
+    // is covered, never reaching into the long tail (anything under the remaining 100 - topMassPct).
+    // Mutually exclusive markets only. The rest are optional and end up as "Other".
+    let reqCache = null;
+    function requiredKeys() {
+      if (reqCache && reqCache.data === ctx.data) return reqCache.keys;
+      const d = ctx.data, o = outs();
+      let keys = [];
+      if (d && d.exclusive && o.length > 2) {
+        const withP = o.filter((x) => x.prob != null && Number.isFinite(x.prob));
+        if (withP.length >= 2) {
+          const total = withP.reduce((a, x) => a + x.prob, 0) || 100;
+          const target = Math.min(100, Math.max(1, Number(ctx.topMassPct) || 95));
+          const floor = Math.max(1, 100 - target);
+          let acc = 0;
+          for (const x of [...withP].sort((a, b) => b.prob - a.prob)) {
+            if (keys.length && x.prob < floor) break;
+            keys.push(x.key);
+            acc += (x.prob / total) * 100;
+            if (acc >= target - 1e-9) break;
+          }
+        }
+      }
+      reqCache = { data: ctx.data, keys };
+      return keys;
+    }
+    const isRequired = (key) => requiredKeys().includes(key);
+
     function hasInput() {
       return allInputs().some((r) => r.input.value.trim() !== '') || !!(freeText && freeText.value.trim());
     }
     function syncButtons() {
-      const show = hasInput();
+      const req = requiredKeys();
+      const filled = new Set(allInputs().filter((r) => r.input.value.trim() !== '').map((r) => r.key));
+      const missing = req.filter((k) => !filled.has(k));
+      const show = req.length ? missing.length === 0 : hasInput();
       for (const b of root.querySelectorAll('button.ff-submit')) b.hidden = !show;
       for (const r of allInputs()) remembered.set(r.key, r.input.value);
+      if (moreEl) {
+        moreEl.hidden = !missing.length;
+        moreEl.textContent = '';
+        if (missing.length) moreEl.append(`${missing.length} more`, h('span.ff-arrow', { text: ' \u2193' }));
+      }
       if (sumEl) {
         const vals = allInputs().map((r) => readNum(r.input)).filter((v) => v != null);
         if (vals.length > 1 && ctx.data && ctx.data.exclusive) {
           const sum = U.round1(vals.reduce((a, b) => a + b, 0));
-          sumEl.textContent = 'Σ ' + (Number.isInteger(sum) ? sum : sum.toFixed(1)) + '%';
+          sumEl.textContent = '\u03a3 ' + (Number.isInteger(sum) ? sum : sum.toFixed(1)) + '%';
           sumEl.classList.toggle('over', sum > 100.5);
         } else sumEl.textContent = '';
       }
@@ -942,41 +1037,48 @@
 
     function modeFor(d) {
       if (d && d.closed) return 'closed';
-      const outs = d && Array.isArray(d.outcomes) ? d.outcomes : null;
+      const o = outs();
       if (!d) return 'binary';
-      if (d.binary === false && (!outs || outs.length === 0)) return 'free';
+      if (d.binary === false && o.length === 0) return 'free';
       // Two mutually exclusive outcomes (a game, cut / no cut): one number says it all.
-      if (outs && outs.length === 2 && d.exclusive) return 'binary';
-      if (outs && outs.length > 1) return inline.length >= Math.max(2, Math.ceil(outs.length * 0.6)) ? 'inline' : 'multi';
+      if (o.length === 2 && d.exclusive) return 'binary';
+      if (o.length > 1) {
+        const req = requiredKeys();
+        const found = new Set(inline.map((x) => x.outcome.key));
+        const need = req.length ? req : o.map((x) => x.key);
+        const hits = need.filter((k) => found.has(k)).length;
+        return hits >= Math.max(1, Math.ceil(need.length * 0.6)) && (req.length > 0 || inline.length >= 2) ? 'inline' : 'multi';
+      }
       return 'binary';
     }
 
     function render() {
       const d = ctx.data;
       const next = modeFor(d);
-      const outs = d && Array.isArray(d.outcomes) ? d.outcomes : [];
+      const o = outs();
       if (next === 'binary' && mode === 'binary' && rows.length) {
         // keep what the user typed; just refresh the key/name and the outcome label
-        if (outs[0]) {
-          rows[0].name = outs[0].name; rows[0].key = outs[0].key;
+        if (o[0]) {
+          rows[0].name = o[0].name; rows[0].key = o[0].key;
           const label = root.querySelector(':scope > .ff-name');
-          if (/^yes$/i.test(outs[0].name)) { if (label) label.remove(); }
-          else if (label) { label.textContent = label.title = outs[0].name; }
-          else root.insertBefore(h('span.ff-name', { title: outs[0].name, text: outs[0].name }), root.firstChild);
+          if (/^yes$/i.test(o[0].name)) { if (label) label.remove(); }
+          else if (label) { label.textContent = label.title = o[0].name; }
+          else root.insertBefore(h('span.ff-name', { title: o[0].name, text: o[0].name }), root.firstChild);
         }
         return;
       }
-      if (next === 'inline' && mode === 'inline') { syncInline(); return; }
+      if (next === 'inline' && mode === 'inline') { syncInline(); syncButtons(); return; }
       mode = next;
       root.textContent = '';
       root.classList.toggle('multi', mode === 'multi');
       rows = [];
       freeText = null;
-      sumEl = null;
+      sumEl = null; moreEl = null; extraBox = null;
       if (mode !== 'inline') FF.ui.keepSlots([]);
       if (mode === 'inline') {
+        moreEl = h('span.ff-hint');
         sumEl = h('span.ff-sum');
-        root.append(h('span.ff-hint', 'Your % next to each outcome', h('span.ff-arrow', { text: ' ↓' })), sumEl, submitBtn(), revealBtn(), status);
+        root.append(moreEl, sumEl, submitBtn(), revealBtn(), status);
         syncInline();
         syncButtons();
         return;
@@ -989,20 +1091,23 @@
         freeText = h('input.ff-free', { type: 'text', placeholder: 'Your estimate', 'aria-label': 'Your estimate', oninput: syncButtons });
         root.append(freeText, submitBtn(), revealBtn(), status);
       } else if (mode === 'multi') {
+        // rows couldn't be found on the page: list what has to be priced (or everything, when nothing is required)
+        const req = requiredKeys();
+        const list = req.length ? o.filter((x) => req.includes(x.key)) : o.slice(0, 40);
         sumEl = h('span.ff-sum');
-        root.append(h('div.ff-row', h('span.ff-hint', { text: 'Your % for any outcome' }), sumEl));
-        for (const o of outs.slice(0, 40)) {
+        root.append(h('div.ff-row', h('span.ff-hint', { text: req.length ? 'Your % for the likeliest outcomes' : 'Your % for any outcome' }), sumEl));
+        for (const x of list) {
           const input = numInput();
-          if (remembered.has(o.key)) input.value = remembered.get(o.key);
-          root.appendChild(h('div.ff-row', h('span.ff-name', { title: o.name, text: o.name }), pct(input)));
-          rows.push({ name: o.name, key: o.key, input });
+          if (remembered.has(x.key)) input.value = remembered.get(x.key);
+          root.appendChild(h('div.ff-row', h('span.ff-name', { title: x.name, text: x.name }), pct(input)));
+          rows.push({ name: x.name, key: x.key, input });
         }
         root.appendChild(h('div.ff-foot', status, submitBtn(), revealBtn()));
       } else {
-        const o = outs[0] || { name: 'Yes', key: 'yes' };
+        const x = o[0] || { name: 'Yes', key: 'yes' };
         const input = numInput();
-        rows.push({ name: o.name, key: o.key, input });
-        if (!/^yes$/i.test(o.name)) root.appendChild(h('span.ff-name', { title: o.name, text: o.name }));
+        rows.push({ name: x.name, key: x.key, input });
+        if (!/^yes$/i.test(x.name)) root.appendChild(h('span.ff-name', { title: x.name, text: x.name }));
         root.append(pct(input), submitBtn(), revealBtn(), status);
       }
       syncButtons();
@@ -1012,19 +1117,18 @@
 
     let extraBox = null;
     function syncInline() {
-      const outs = ctx.data && ctx.data.outcomes || [];
       const targets = [];
       let first = null;
-      for (const { outcome, target } of inline) {
+      for (const { outcome, target, kind, row } of inline) {
         targets.push(target);
-        const input = FF.ui.setSlot(target, outcome.key, outcome.name, remembered.get(outcome.key), syncButtons, submit);
-        if (!first) first = input;
+        const input = FF.ui.setSlot(target, outcome.key, outcome.name, remembered.get(outcome.key), syncButtons, submit, { kind, row, required: isRequired(outcome.key) });
+        if (!first || (isRequired(outcome.key) && !first.required)) { first = input; first.required = isRequired(outcome.key); }
       }
       FF.ui.keepSlots(targets);
-      // outcomes we couldn't find on the page still get a row inside the panel
-      const matched = new Set(inline.map((x) => x.outcome.key));
-      const missing = outs.filter((o) => !matched.has(o.key));
-      const keys = missing.map((o) => o.key).join('|');
+      // required outcomes we couldn't find on the page still get a row inside the panel
+      const found = new Set(inline.map((x) => x.outcome.key));
+      const missing = outs().filter((x) => isRequired(x.key) && !found.has(x.key));
+      const keys = missing.map((x) => x.key).join('|');
       if (keys !== (extraBox && extraBox.dataset.keys)) {
         if (extraBox) extraBox.remove();
         rows = [];
@@ -1032,11 +1136,11 @@
         if (missing.length) {
           extraBox = h('div.ff-extra');
           extraBox.dataset.keys = keys;
-          for (const o of missing.slice(0, 20)) {
+          for (const x of missing.slice(0, 20)) {
             const input = numInput();
-            if (remembered.has(o.key)) input.value = remembered.get(o.key);
-            extraBox.appendChild(h('div.ff-row', h('span.ff-name', { title: o.name, text: o.name }), pct(input)));
-            rows.push({ name: o.name, key: o.key, input });
+            if (remembered.has(x.key)) input.value = remembered.get(x.key);
+            extraBox.appendChild(h('div.ff-row', h('span.ff-name', { title: x.name, text: x.name }), pct(input)));
+            rows.push({ name: x.name, key: x.key, input });
           }
           root.appendChild(extraBox);
           root.classList.add('multi');
@@ -1055,6 +1159,8 @@
         const first = root.querySelector('input'); if (first) first.focus({ preventScroll: true });
         return;
       }
+      const missing = requiredKeys().filter((k) => !values.some((v) => v.key === k));
+      if (missing.length) { syncButtons(); const slot = FF.ui.slotList().find((r) => r.key === missing[0]); if (slot) slot.input.focus({ preventScroll: false }); return; }
       busy = true;
       for (const b of root.querySelectorAll('button.primary')) b.disabled = true;
       try { await ctx.onSubmit({ values, freeText: text }); }
@@ -1075,7 +1181,7 @@
     render();
     return {
       el: root,
-      setData(d) { ctx.data = d; render(); },
+      setData(d) { ctx.data = d; reqCache = null; render(); },
       // called repeatedly by the orchestrator with the page rows found for the outcomes
       setInline(list) {
         const same = list.length === inline.length && list.every((x, i) => x.target === inline[i].target && x.outcome.key === inline[i].outcome.key);
@@ -1094,8 +1200,9 @@
     root.appendChild(closeBtn);
     const stat = (lbl, val) => h('span.stat', h('span.lbl', { text: lbl }), h('span.val', { text: val }));
     let anyGap = false;
-    const multi = ctx.entry.outcomes.length > 1;
+    const multi = ctx.entry.outcomes.filter((o) => !o.derived).length > 1;
     for (const o of ctx.entry.outcomes) {
+      if (o.derived) continue;
       if (multi || !/^yes$/i.test(o.name)) root.appendChild(h('div.ff-outcome', { text: o.name }));
       const cmp = h('div.ff-cmp', stat(label, U.fmtPct(o.actual)), stat('You', U.fmtPct(o.personal)));
       if (o.actual != null && o.personal != null) {

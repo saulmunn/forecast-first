@@ -181,6 +181,7 @@
     c.form = FF.buildForm({
       adapter,
       data: c.data,
+      topMassPct: Number(settings.topMassPct) || 95,
       onSubmit: (values) => submit(c, values),
       onSkip: () => skip(c),
     });
@@ -214,6 +215,11 @@
       name: v.name, key: v.key, personal: v.personal,
       actual: actualFor(v, data, scraped, values.values.length),
     }));
+    // A two-way market is asked as one number; the other side is its complement.
+    if (data && data.exclusive && Array.isArray(data.outcomes) && data.outcomes.length === 2 && outcomes.length === 1) {
+      const other = data.outcomes.find((o) => o.key !== outcomes[0].key);
+      if (other) outcomes.push({ name: other.name, key: other.key, personal: U.round1(100 - outcomes[0].personal), actual: actualFor(other, data, scraped, 2), derived: true });
+    }
     const entry = {
       id: U.uuid(),
       at: Date.now(),
@@ -227,6 +233,10 @@
       reasoning: '',
       resolveBy: (data && data.closeDate) || U.todayPlus(settings.defaultResolveDays),
       consensusLabel: adapter.consensusShort || 'Market',
+      // multi-outcome markets become one multiple-choice question on Fatebook
+      multi: !!(data && Array.isArray(data.outcomes) && data.outcomes.length > 1),
+      exclusive: !!(data && data.exclusive),
+      outcomeCount: data && Array.isArray(data.outcomes) ? data.outcomes.length : 1,
       fatebook: [],
       // Fatebook question is created once the reveal card closes, so the reasoning can go in the notes.
       fatebookPending: !!(settings.fatebookApiKey && outcomes.some((o) => o.personal != null)),
@@ -261,7 +271,7 @@
   const fbLines = (entry, res) => {
     const mine = res && res.results && res.results.find((r) => r.id === entry.id);
     if (!mine) return [{ error: 'could not reach the background worker' }];
-    return mine.fatebook.map((f) => (f.url ? { url: f.url, updated: !!f.updated, label: entry.outcomes.length > 1 ? f.name : '' } : { error: f.error }));
+    return mine.fatebook.map((f) => (f.url ? { url: f.url, updated: !!f.updated, label: f.kind !== 'mc' && entry.outcomes.filter((o) => !o.derived).length > 1 ? f.name : '' } : { error: f.error }));
   };
 
   function showReveal(entry, creating) {

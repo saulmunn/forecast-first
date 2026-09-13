@@ -6,6 +6,7 @@ const ALLOWED_HOSTS = new Set([
   'gamma-api.polymarket.com',
   'api.elections.kalshi.com',
   'fatebook.io',
+  'api.manifold.markets',
 ]);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -100,29 +101,83 @@ async function fatebookPost(settings, path, body) {
     throw new Error(String(detail).slice(0, 200) + ' (HTTP ' + r.status + ')');
   }
 }
+// Multiple-choice questions aren't in the public API. The web app creates them through tRPC with the
+// user's fatebook.io login; the browser attaches those cookies because fatebook.io is a host permission.
+const slugify = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'q';
+function mcOptions(f) {
+  const filled = (f.outcomes || []).filter((o) => o.personal != null);
+  const sum = filled.reduce((a, o) => a + o.personal, 0);
+  let opts = filled.map((o) => ({ text: o.name, p: o.personal }));
+  if (f.exclusive) {
+    const allPriced = filled.length >= (f.outcomeCount || filled.length);
+    if (sum > 100 || (allPriced && sum > 0 && Math.abs(sum - 100) > 0.5)) opts = opts.map((o) => ({ text: o.text, p: (o.p * 100) / sum }));
+    else if (!allPriced && 100 - sum >= 0.5) opts.push({ text: 'Other', p: 100 - sum });
+  }
+  return opts.map((o) => ({ text: o.text, prediction: Math.min(1, Math.max(0.001, o.p / 100)) }));
+}
+async function fatebookCreateMulti(settings, { title, resolveBy, options, exclusive, extraTags }) {
+  const tags = [...new Set(String(settings.fatebookTags || '').split(',').map((t) => t.trim()).filter(Boolean).concat(extraTags || []))];
+  const input = { title, resolveBy: new Date(resolveBy).toISOString(), tags, sharedPublicly: !!settings.fatebookSharePublicly, exclusiveAnswers: !!exclusive, options };
+  const r = await fetch('https://fatebook.io/api/trpc/question.create', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ json: input, meta: { values: { resolveBy: ['Date'] } } }),
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    let detail = text;
+    try { const j = JSON.parse(text); detail = (j.error && j.error.json && j.error.json.message) || (j.error && j.error.message) || text; } catch (_) {}
+    if (r.status === 401 || /logged in|UNAUTHORIZED/i.test(String(detail))) throw new Error('not logged in to fatebook.io (HTTP ' + r.status + ')');
+    throw new Error(String(detail).slice(0, 200) + ' (HTTP ' + r.status + ')');
+  }
+  let q = null;
+  try { const j = JSON.parse(text); const d = j.result && j.result.data; q = d && (d.json || d); } catch (_) {}
+  if (!q || !q.id) {
+    // the mutation may not echo the question back: find it by title
+    const u = new URL('https://fatebook.io/api/v0/getQuestions');
+    u.searchParams.set('apiKey', (settings.fatebookApiKey || '').trim());
+    u.searchParams.set('searchString', title);
+    u.searchParams.set('limit', '5');
+    const list = await (await fetch(u.toString())).json().catch(() => null);
+    const items = (list && (list.items || list.questions || list)) || [];
+    q = Array.isArray(items) ? items.find((x) => x && x.title === title) : null;
+    if (!q || !q.id) throw new Error('created, but could not read the new question back');
+  }
+  const optionIds = {};
+  for (const o of q.options || []) optionIds[o.text] = o.id;
+  return { id: q.id, url: `https://fatebook.io/q/${slugify(title)}--${q.id}`, optionIds };
+}
+
 // The Fatebook question already created for this market + outcome by an earlier forecast, if any.
 function existingQuestion(forecasts, f, outcomeName) {
   const prior = forecasts.filter((x) => x.id !== f.id && x.marketKey === f.marketKey && (x.at || 0) <= (f.at || 0)).sort((a, b) => (b.at || 0) - (a.at || 0));
   for (const x of prior) {
     const q = (x.fatebook || []).find((y) => y.url && y.name === outcomeName);
-    if (q) return { url: q.url, id: q.id || questionIdFromUrl(q.url) };
+    if (q) return { url: q.url, id: q.id || questionIdFromUrl(q.url), optionIds: q.optionIds || null };
   }
   return null;
 }
+const isTransient = (e) => /HTTP 5\d\d|Failed to fetch|NetworkError/i.test((e && e.message) || String(e));
 const questionIdFromUrl = (url) => { const m = String(url || '').match(/--([a-z0-9]+)\/?$/i); return m ? m[1] : null; };
-function notesFor(f, o) {
+function marketLine(f, o) {
   const consensus = f.consensusLabel || 'Market';
-  return [
-    f.reasoning,
-    o && o.actual != null ? `${consensus} when I forecast: ${o.actual}%` : '',
-    `Source: ${f.url}`,
-  ].filter(Boolean).join('\n');
+  if (o) return o.actual != null ? `${consensus} when I forecast: ${o.actual}%` : '';
+  const parts = (f.outcomes || []).filter((x) => x.personal != null && x.actual != null && !x.derived).map((x) => `${x.name} ${x.actual}%`);
+  return parts.length ? `${consensus} when I forecast: ${parts.join(', ')}` : '';
+}
+function notesFor(f, o) {
+  return [f.reasoning, marketLine(f, o), `Source: ${f.url}`].filter(Boolean).join('\n');
 }
 function commentFor(f, o) {
-  const consensus = f.consensusLabel || 'Market';
-  const pct = o && o.personal != null ? `${o.personal}%` : '';
-  const mkt = o && o.actual != null ? ` (${consensus.toLowerCase()} ${o.actual}%)` : '';
-  return [pct ? `Updated forecast: ${pct}${mkt}` : '', f.reasoning].filter(Boolean).join('\n');
+  const consensus = (f.consensusLabel || 'Market').toLowerCase();
+  let head = '';
+  if (o) head = o.personal != null ? `Updated forecast: ${o.personal}%` + (o.actual != null ? ` (${consensus} ${o.actual}%)` : '') : '';
+  else {
+    const parts = (f.outcomes || []).filter((x) => x.personal != null && !x.derived).map((x) => `${x.name} ${x.personal}%` + (x.actual != null ? ` (${consensus} ${x.actual}%)` : ''));
+    head = parts.length ? `Updated forecast: ${parts.join(', ')}` : '';
+  }
+  return [head, f.reasoning].filter(Boolean).join('\n');
 }
 async function patchForecasts(results) {
   const fresh = (await chrome.storage.local.get('forecasts')).forecasts || [];
@@ -146,7 +201,30 @@ function fatebookFlush({ id } = {}) {
     const results = [];
     for (const f of targets) {
       const done = (f.fatebook || []).filter((x) => x.url);
+      let mcFailed = null;
+      if (f.multi && !done.length && (f.outcomes || []).some((o) => o.personal != null)) {
+        const options = mcOptions(f);
+        const prev = existingQuestion(forecasts, f, '*');
+        try {
+          if (prev && prev.id && prev.optionIds) {
+            // same market as before: add forecasts to the existing question's options
+            for (const o of options) {
+              const optionId = prev.optionIds[o.text];
+              if (optionId) await fatebookPost(settings, 'addForecast', { questionId: prev.id, forecast: o.prediction, optionId });
+            }
+            done.push({ name: '*', kind: 'mc', url: prev.url, id: prev.id, optionIds: prev.optionIds, updated: true });
+          } else {
+            const q = await fatebookCreateMulti(settings, { title: f.title, resolveBy: f.resolveBy, options, exclusive: f.exclusive, extraTags: [f.site] });
+            done.push({ name: '*', kind: 'mc', url: q.url, id: q.id, optionIds: q.optionIds });
+          }
+        } catch (e) {
+          if (isTransient(e)) { done.push({ name: '*', error: (e && e.message) || String(e) }); }
+          else mcFailed = (e && e.message) || String(e); // e.g. not logged in: fall back to one yes/no question per outcome
+        }
+      }
+      const binaryFallback = !done.some((x) => x.kind === 'mc' || x.name === '*');
       for (const o of f.outcomes || []) {
+        if (!binaryFallback || o.derived) continue;
         if (o.personal == null || done.some((x) => x.name === o.name)) continue;
         const title = /^yes$/i.test(o.name) ? f.title : `${f.title} — ${o.name}`;
         const forecast = Math.min(1, Math.max(0.001, o.personal / 100));
@@ -172,6 +250,7 @@ function fatebookFlush({ id } = {}) {
       const failed = done.filter((x) => x.error);
       // Retry later only for network-type failures; API rejections (bad key, bad date) won't fix themselves.
       const retry = failed.some((x) => /Failed to fetch|NetworkError|HTTP 5\d\d/i.test(x.error));
+      if (mcFailed && done.some((x) => x.url)) console.warn('[Forecast First] multiple-choice question failed, made yes/no questions instead:', mcFailed);
       results.push({ id: f.id, fatebook: done, fatebookPending: retry, patch: { fatebook: done, fatebookPending: retry } });
     }
     if (results.length) await patchForecasts(results);
@@ -192,7 +271,7 @@ function fatebookNotes({ id }) {
     for (const q of f.fatebook || []) {
       const qid = q.id || questionIdFromUrl(q.url);
       if (!qid) continue;
-      const o = (f.outcomes || []).find((x) => x.name === q.name);
+      const o = q.kind === 'mc' ? null : (f.outcomes || []).find((x) => x.name === q.name);
       try {
         // A question we created gets the reasoning in its notes; a question we only added a forecast to gets a comment.
         if (q.updated) {

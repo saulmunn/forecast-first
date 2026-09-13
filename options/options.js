@@ -1,9 +1,9 @@
 const DEFAULTS = {
   enabled: true, maskListings: true,
-  reaskHours: 24, defaultResolveDays: 30, fatebookApiKey: '', fatebookTags: 'forecast-first', fatebookSharePublicly: false,
+  reaskHours: 24, topMassPct: 95, defaultResolveDays: 30, fatebookApiKey: '', fatebookTags: 'forecast-first', fatebookSharePublicly: false,
 };
 const $ = (id) => document.getElementById(id);
-const fields = ['fatebookApiKey', 'fatebookTags', 'fatebookSharePublicly', 'defaultResolveDays', 'maskListings', 'reaskHours', 'enabled'];
+const fields = ['fatebookApiKey', 'fatebookTags', 'fatebookSharePublicly', 'defaultResolveDays', 'maskListings', 'reaskHours', 'topMassPct', 'enabled'];
 
 async function loadSettings() {
   const stored = await chrome.storage.sync.get(null);
@@ -26,6 +26,7 @@ function scheduleSave() {
     }
     out.fatebookApiKey = out.fatebookApiKey.trim();
     out.reaskHours = Number(out.reaskHours);
+    out.topMassPct = Math.min(100, Math.max(1, Number(out.topMassPct) || 95));
     await chrome.storage.sync.set(out);
     $('saved').hidden = false;
     setTimeout(() => ($('saved').hidden = true), 1500);

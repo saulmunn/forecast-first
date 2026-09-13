@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Forecast First",
-  "version": "0.4.0",
-  "description": "Hides the market price / community forecast on Polymarket, Kalshi and Metaculus until you record your own forecast. Logs each forecast to Fatebook.",
+  "version": "0.5.0",
+  "description": "Hides the market price / community forecast on Polymarket, Kalshi, Metaculus and Manifold until you record your own forecast. Logs each forecast to Fatebook.",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
     "https://gamma-api.polymarket.com/*",
     "https://api.elections.kalshi.com/*",
-    "https://fatebook.io/*"
+    "https://fatebook.io/*",
+    "https://api.manifold.markets/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -24,7 +25,8 @@
         "https://kalshi.com/*",
         "https://*.kalshi.com/*",
         "https://metaculus.com/*",
-        "https://*.metaculus.com/*"
+        "https://*.metaculus.com/*",
+        "https://manifold.markets/*"
       ],
       "css": [
         "content/blind.css"
@@ -34,6 +36,7 @@
         "content/sites/polymarket.js",
         "content/sites/kalshi.js",
         "content/sites/metaculus.js",
+        "content/sites/manifold.js",
         "content/main.js"
       ],
       "run_at": "document_start"
@@ -47,7 +50,8 @@
         "https://kalshi.com/*",
         "https://*.kalshi.com/*",
         "https://metaculus.com/*",
-        "https://*.metaculus.com/*"
+        "https://*.metaculus.com/*",
+        "https://manifold.markets/*"
       ],
       "js": [
         "content/nav-main.js"
