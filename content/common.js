@@ -461,10 +461,14 @@
       border: 1px solid var(--ff-border);
     }
     .ff-cover.small { border-radius: 8px; }
-    .ff-slot { position: absolute; z-index: 2; display: flex; align-items: center; gap: 3px; }
-    .ff-slot input { flex: 1; min-width: 0; height: 100%; text-align: right; padding: 2px 8px; font-size: 14px; font-weight: 600; }
-    .ff-slot .pct { color: var(--ff-muted); font-size: 13px; }
-    .ff-slot.req input { border-color: var(--ff-accent); box-shadow: 0 0 0 2px var(--ff-accent-soft); }
+    .ff-slot { position: absolute; z-index: 2; }
+    /* opaque, so the striped cover underneath never shows through; the % sits inside the field */
+    .ff-slot input[type=number] {
+      width: 100%; height: 100%; text-align: right; padding: 2px 24px 2px 8px; font-size: 14px; font-weight: 600;
+      background-color: var(--ff-surface); background-image: linear-gradient(var(--ff-input-bg), var(--ff-input-bg));
+    }
+    .ff-slot .pct { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: var(--ff-muted); font-size: 13px; pointer-events: none; }
+    .ff-slot.req input[type=number] { border-color: var(--ff-accent); box-shadow: 0 0 0 2px var(--ff-accent-soft); }
     .ff-hint { font-size: 12px; color: var(--ff-muted); white-space: nowrap; }
     .ff-sum { font-size: 12px; color: var(--ff-muted); font-variant-numeric: tabular-nums; }
     .ff-sum.over { color: #f87171; }
