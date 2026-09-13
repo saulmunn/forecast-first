@@ -1197,7 +1197,7 @@
         return;
       }
       const missing = requiredKeys().filter((k) => !values.some((v) => v.key === k));
-      if (missing.length) { syncButtons(); const slot = FF.ui.slotList().find((r) => r.key === missing[0]); if (slot) slot.input.focus({ preventScroll: false }); return; }
+      if (missing.length) { syncButtons(); const slot = allInputs().find((r) => r.key === missing[0]); if (slot) slot.input.focus({ preventScroll: false }); return; }
       busy = true;
       for (const b of root.querySelectorAll('button.primary')) b.disabled = true;
       try { await ctx.onSubmit({ values, freeText: text }); }
