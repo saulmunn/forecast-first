@@ -169,15 +169,19 @@ function marketLine(f, o) {
 function notesFor(f, o) {
   return [f.reasoning, marketLine(f, o), `Source: ${f.url}`].filter(Boolean).join('\n');
 }
-function commentFor(f, o) {
-  const consensus = (f.consensusLabel || 'Market').toLowerCase();
-  let head = '';
-  if (o) head = o.personal != null ? `Updated forecast: ${o.personal}%` + (o.actual != null ? ` (${consensus} ${o.actual}%)` : '') : '';
-  else {
-    const parts = (f.outcomes || []).filter((x) => x.personal != null && !x.derived).map((x) => `${x.name} ${x.personal}%` + (x.actual != null ? ` (${consensus} ${x.actual}%)` : ''));
-    head = parts.length ? `Updated forecast: ${parts.join(', ')}` : '';
-  }
-  return [head, f.reasoning].filter(Boolean).join('\n');
+// Posted on the question when a repeat forecast is added: what you said and what the market said, right then.
+function updateComment(f, o) {
+  const consensus = f.consensusLabel || 'Market';
+  const one = (x) => `${x.personal}%` + (x.actual != null ? ` (${consensus.toLowerCase()} was ${x.actual}%)` : '');
+  if (o) return o.personal != null ? `Updated forecast: ${one(o)}` : '';
+  const parts = (f.outcomes || []).filter((x) => x.personal != null && !x.derived).map((x) => `${x.name} ${one(x)}`);
+  return parts.length ? `Updated forecast: ${parts.join(', ')}` : '';
+}
+async function postUpdateComment(settings, questionId, f, o) {
+  const comment = updateComment(f, o);
+  if (!comment) return;
+  try { await fatebookPost(settings, 'addComment', { questionId, comment }); }
+  catch (e) { console.warn('[Forecast First] could not comment the market value on the Fatebook question:', (e && e.message) || e); }
 }
 async function patchForecasts(results) {
   const fresh = (await chrome.storage.local.get('forecasts')).forecasts || [];
@@ -212,6 +216,7 @@ function fatebookFlush({ id } = {}) {
               const optionId = prev.optionIds[o.text];
               if (optionId) await fatebookPost(settings, 'addForecast', { questionId: prev.id, forecast: o.prediction, optionId });
             }
+            await postUpdateComment(settings, prev.id, f, null);
             done.push({ name: '*', kind: 'mc', url: prev.url, id: prev.id, optionIds: prev.optionIds, updated: true });
           } else {
             const q = await fatebookCreateMulti(settings, { title: f.title, resolveBy: f.resolveBy, options, exclusive: f.exclusive, extraTags: [f.site] });
@@ -234,6 +239,7 @@ function fatebookFlush({ id } = {}) {
             // Same question as before: add a forecast to it instead of creating a duplicate.
             try {
               await fatebookPost(settings, 'addForecast', { questionId: prev.id, forecast });
+              await postUpdateComment(settings, prev.id, f, o);
               done.push({ name: o.name, url: prev.url, id: prev.id, updated: true });
               continue;
             } catch (e) {
@@ -275,7 +281,7 @@ function fatebookNotes({ id }) {
       try {
         // A question we created gets the reasoning in its notes; a question we only added a forecast to gets a comment.
         if (q.updated) {
-          if (f.reasoning) await fatebookPost(settings, 'addComment', { questionId: qid, comment: commentFor(f, o) });
+          if (f.reasoning) await fatebookPost(settings, 'addComment', { questionId: qid, comment: f.reasoning });
         } else await fatebookEdit(settings, qid, { notes: notesFor(f, o) });
         out.push({ name: q.name, ok: true });
       } catch (e) { out.push({ name: q.name, error: (e && e.message) || String(e) }); }
