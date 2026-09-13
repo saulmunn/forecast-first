@@ -181,7 +181,7 @@
     c.form = FF.buildForm({
       adapter,
       data: c.data,
-      topMassPct: Number(settings.topMassPct) || 95,
+      topMassPct: Number(settings.topMassPct) || 90,
       onSubmit: (values) => submit(c, values),
       onSkip: () => skip(c),
     });
@@ -388,6 +388,17 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'sync' || (area === 'local' && changes.pausedUntil)) route();
   });
+
+  // Dev convenience (unpacked installs only): a page can ask the extension to reload itself,
+  // so an automated test loop doesn't need chrome://extensions. `window.postMessage({ type: 'ff-dev-reload' }, '*')`.
+  let devInstall = false;
+  try { devInstall = !chrome.runtime.getManifest().update_url; } catch (_) {}
+  if (devInstall) {
+    window.addEventListener('message', (e) => {
+      if (e.source !== window || !e.data || e.data.type !== 'ff-dev-reload') return;
+      FF.bg({ type: 'devReload' }).catch(() => {});
+    });
+  }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || typeof msg.type !== 'string') return;

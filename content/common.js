@@ -6,16 +6,17 @@
   if (FF.commonLoaded) return;
   FF.commonLoaded = true;
 
-  FF.VERSION = '0.5.1';
+  FF.VERSION = '0.5.2';
   FF.adapters = [];
   FF.registerAdapter = (adapter) => FF.adapters.push(adapter);
 
   // ------------------------------------------------------------------ settings & storage
+  FF.MAX_REQUIRED = 5; // multi-outcome: never ask for more than this many outcomes
   FF.DEFAULT_SETTINGS = {
     enabled: true,
     maskListings: true,       // blur probabilities on non-question pages (home, search, lists)
     reaskHours: 24,           // after a forecast or reveal, hide and ask again after N hours. 0 = every visit, -1 = stay revealed
-    topMassPct: 95,           // multi-outcome: you must price the market's top outcomes covering this much of its probability
+    topMassPct: 90,           // multi-outcome: price the fewest likeliest outcomes whose probabilities add up to this much
     defaultResolveDays: 30,   // Fatebook resolveBy fallback when the market has no end date
     fatebookApiKey: '',
     fatebookTags: 'forecast-first',
@@ -178,6 +179,8 @@
     // A node holding only the unit: "%", "¢", or Kalshi's payout "x" (rendered as <span>2.52</span>x).
     const BARE = /^\s*[%¢x×]\s*$/;
     const NUMERIC = /^\s*<?\s*\d+(?:[.,]\d+)?\s*$/;
+    // Change badges: "▲ 5", "↓12", "+3%" next to an arrow glyph — they give the day's move away.
+    const DELTA = /[▲▼△▽↑↓⬆⬇]\s?[+\-\u2212]?\d+(?:[.,]\d+)?%?|[+\-\u2212]?\d+(?:[.,]\d+)?%?\s?[▲▼△▽↑↓⬆⬇]/g;
     const supported = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight !== 'undefined';
     let active = false;
     let observer = null;
@@ -235,7 +238,7 @@
           return /\S/.test(n.data) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
         },
       });
-      const extra = Array.isArray(opts.patterns) ? opts.patterns : [];
+      const extra = [DELTA].concat(Array.isArray(opts.patterns) ? opts.patterns : []);
       let prev = null, node;
       while ((node = walker.nextNode())) {
         const d = node.data;
@@ -291,6 +294,27 @@
           const el = r.startContainer.parentElement;
           if (el && el.textContent.length < 40) { el.setAttribute('data-ff-mask', ''); marked.add(el); }
         }
+      }
+      // Change badges drawn as an icon plus a number ("<svg arrow/> 12" in a red or green pill): blank the pill.
+      const BADGE_NUM = /^\s*[+\-\u2212]?\d+(?:[.,]\d+)?%?\s*$/;
+      for (const svg of document.querySelectorAll('svg')) {
+        const sr = svg.getBoundingClientRect();
+        if (sr.width < 6 || sr.width > 28 || sr.height > 28 || svg.closest(SKIP_ANCESTORS)) continue;
+        const chain = [];
+        for (let el = svg.parentElement, i = 0; el && i < 3; el = el.parentElement, i++) {
+          if (!BADGE_NUM.test(el.textContent)) break;
+          if (el.getBoundingClientRect().width > 110) break;
+          chain.push(el);
+        }
+        const box = chain[chain.length - 1];
+        if (!box || box.hasAttribute('data-ff-mask')) continue;
+        // Red/green anywhere in the pill (text or background) is what marks it as a change, not a count.
+        const colored = chain.some((el) => {
+          const cs = getComputedStyle(el);
+          const fg = FF.theme.parse(cs.color), bg = FF.theme.parse(cs.backgroundColor);
+          return (fg && fg[3] > 0.3 && sat(fg) > 0.3) || (bg && bg[3] > 0.2 && sat(bg) > 0.25);
+        });
+        if (colored) odo.push(box);
       }
       // The page's own price inputs (Kalshi's "Limit price 20 ¢") carry the market value as a value, not text.
       for (const inp of document.querySelectorAll('input[type=text], input[type=number], input:not([type])')) {
@@ -493,6 +517,9 @@
     .ff-form.multi > .ff-foot { bottom: 0; padding-top: 4px; }
     .ff-extra { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
     .ff-extra .ff-row { justify-content: space-between; }
+    .ff-form.multi > .ff-extra { order: -1; margin: 0 0 4px; }
+    .ff-form.multi > .ff-ctl { justify-content: flex-end; }
+    .ff-form.multi > .ff-ctl .ff-hint { margin-right: auto; }
     .ff-form.multi .ff-row { justify-content: space-between; }
     .ff-form.multi .ff-foot { margin-top: 6px; justify-content: flex-end; }
     [hidden] { display: none !important; }
@@ -994,9 +1021,8 @@
     const outs = () => (ctx.data && Array.isArray(ctx.data.outcomes) ? ctx.data.outcomes : []);
     const allInputs = () => rows.map((r) => ({ key: r.key, name: r.name, input: r.input })).concat(FF.ui.slotList());
 
-    // The outcomes you have to price: the market's likeliest ones until `topMassPct` of its probability
-    // is covered, never reaching into the long tail (anything under the remaining 100 - topMassPct).
-    // Mutually exclusive markets only. The rest are optional and end up as "Other".
+    // The outcomes you have to price: the fewest of the market's likeliest outcomes whose probabilities
+    // add up to `topMassPct` — and never more than MAX_REQUIRED, however long the tail.
     let reqCache = null;
     function requiredKeys() {
       if (reqCache && reqCache.data === ctx.data) return reqCache.keys;
@@ -1005,15 +1031,12 @@
       if (d && d.exclusive && o.length > 2) {
         const withP = o.filter((x) => x.prob != null && Number.isFinite(x.prob));
         if (withP.length >= 2) {
-          const total = withP.reduce((a, x) => a + x.prob, 0) || 100;
-          const target = Math.min(100, Math.max(1, Number(ctx.topMassPct) || 95));
-          const floor = Math.max(1, 100 - target);
+          const target = Math.min(100, Math.max(1, Number(ctx.topMassPct) || 90));
           let acc = 0;
           for (const x of [...withP].sort((a, b) => b.prob - a.prob)) {
-            if (keys.length && x.prob < floor) break;
             keys.push(x.key);
-            acc += (x.prob / total) * 100;
-            if (acc >= target - 1e-9) break;
+            acc += x.prob;
+            if (acc >= target - 1e-9 || keys.length >= FF.MAX_REQUIRED) break;
           }
         }
       }
@@ -1090,7 +1113,9 @@
       if (mode === 'inline') {
         moreEl = h('span.ff-hint');
         sumEl = h('span.ff-sum');
-        root.append(moreEl, sumEl, submitBtn(), revealBtn(), status);
+        // One control row, so that when required outcomes missing from the page are listed above it
+        // (.ff-extra, column layout) the hint, Σ and buttons still sit together on the last line.
+        root.append(h('div.ff-row.ff-ctl', moreEl, sumEl, submitBtn(), revealBtn(), status));
         syncInline();
         syncButtons();
         return;

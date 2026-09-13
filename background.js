@@ -35,6 +35,11 @@ async function handle(msg) {
     case 'openOptions':
       await chrome.runtime.openOptionsPage();
       return { ok: true };
+    case 'devReload':
+      // Only unpacked (developer) installs have no update_url; store installs ignore this.
+      if (chrome.runtime.getManifest().update_url) throw new Error('Not a developer install');
+      setTimeout(() => chrome.runtime.reload(), 50);
+      return { ok: true };
     default:
       throw new Error('Unknown message type');
   }
