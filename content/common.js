@@ -6,7 +6,7 @@
   if (FF.commonLoaded) return;
   FF.commonLoaded = true;
 
-  FF.VERSION = '0.5.0';
+  FF.VERSION = '0.5.1';
   FF.adapters = [];
   FF.registerAdapter = (adapter) => FF.adapters.push(adapter);
 
@@ -292,6 +292,13 @@
           if (el && el.textContent.length < 40) { el.setAttribute('data-ff-mask', ''); marked.add(el); }
         }
       }
+      // The page's own price inputs (Kalshi's "Limit price 20 ¢") carry the market value as a value, not text.
+      for (const inp of document.querySelectorAll('input[type=text], input[type=number], input:not([type])')) {
+        if (!/^\s*\d+(?:[.,]\d+)?\s*$/.test(inp.value || '')) continue;
+        const near = ((inp.nextElementSibling && inp.nextElementSibling.textContent) || '') + ((inp.parentElement && inp.parentElement.textContent) || '');
+        const label = (inp.getAttribute('aria-label') || '') + ' ' + (inp.placeholder || '') + ' ' + (inp.name || '');
+        if (/[¢%]/.test(near) || /price|odds|chance|probab/i.test(label)) odo.push(inp);
+      }
       for (const el of odo) if (!marked.has(el)) { el.setAttribute('data-ff-mask', ''); marked.add(el); }
     }
     const schedule = () => { if (active && !timer) timer = setTimeout(scan, 80); };
@@ -451,7 +458,7 @@
     :host { all: initial; }
     * { box-sizing: border-box; }
     .layer { position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; }
-    .ff-cover, .ff-panel, .ff-card, .ff-badge, .ff-chip {
+    .ff-cover, .ff-panel, .ff-card, .ff-badge, .ff-chip, .ff-slot {
       font-family: var(--ff-font); font-size: 14px; line-height: 1.4; color: var(--ff-fg);
       pointer-events: auto; -webkit-font-smoothing: antialiased;
     }
@@ -470,7 +477,7 @@
     .ff-slot .pct { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: var(--ff-muted); font-size: 13px; pointer-events: none; }
     .ff-slot.req input[type=number] { border-color: var(--ff-accent); box-shadow: 0 0 0 2px var(--ff-accent-soft); }
     .ff-hint { font-size: 12px; color: var(--ff-muted); white-space: nowrap; }
-    .ff-sum { font-size: 12px; color: var(--ff-muted); font-variant-numeric: tabular-nums; }
+    .ff-sum { font-size: 12px; color: var(--ff-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .ff-sum.over { color: #f87171; }
     .ff-panel {
       position: absolute; z-index: 2; padding: 10px 12px;
@@ -944,9 +951,10 @@
       const row = rowOf(nameEl, hit);
       if (row.getBoundingClientRect().width < 120) continue; // a chip or legend entry, not a row
       let target = null, kind = 'row';
-      const cands = [...row.querySelectorAll('*')].filter((c) => c.tagName !== 'svg' && !c.contains(nameEl) && !excluded(c) && PCTTEXT.test(c.textContent.trim()));
+      // sites keep hidden copies of the number for other breakpoints; only visible ones count
+      const cands = [...row.querySelectorAll('*')].filter((c) => c.tagName !== 'svg' && !c.contains(nameEl) && !excluded(c) && PCTTEXT.test(c.textContent.trim()) && visible(c));
       const pctEl = cands.find((c) => !cands.some((d) => d !== c && c.contains(d))) || cands[0];
-      if (pctEl && visible(pctEl) && parseFloat(getComputedStyle(pctEl).fontSize) >= 12) { target = pctEl; kind = 'pct'; }
+      if (pctEl && parseFloat(getComputedStyle(pctEl).fontSize) >= 12) { target = pctEl; kind = 'pct'; }
       if (!target) {
         const pill = [...row.querySelectorAll('button, [role="button"], [data-testid="price-pill"]')].find((b) => visible(b) && !b.contains(nameEl) && b.getBoundingClientRect().width >= 40);
         if (pill) { target = pill; kind = 'pill'; }
