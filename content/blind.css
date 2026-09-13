@@ -1,0 +1,47 @@
+/* Forecast First — page-level styles.
+   Everything visual lives in the extension's shadow DOM; these rules only
+   (1) blank out the regions we mark, as early as possible, and
+   (2) style the text-token mask (CSS Custom Highlight API). */
+
+/* Regions the adapters mark while the page is blind. */
+html[data-ff-blind] [data-ff-hidden] {
+  visibility: hidden !important;
+}
+/* Things inside a hidden region that are fine to show (volume, forecaster counts). */
+html[data-ff-blind] [data-ff-keep] {
+  visibility: visible !important;
+}
+
+/* Pre-emptive hiding of known containers so nothing flashes before JS marks them. */
+html[data-ff-blind] #group-chart-container,
+html[data-ff-blind] #outcome-buttons,
+html[data-ff-blind] [data-testid="price-pill"],
+html[data-ff-blind] svg[data-dd-excluded-activity-mutations],
+html[data-ff-blind] .VictoryContainer {
+  visibility: hidden !important;
+}
+
+/* Graphics that encode the probability (charts, gauges, sparklines, proportional bars) while masking is on. */
+[data-ff-veil] {
+  visibility: hidden !important;
+}
+
+/* Number tokens like "17%" / "84¢" anywhere in the page while masking is on. */
+::highlight(ff-mask) {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-color: rgba(128, 128, 128, 0.35);
+}
+
+/* Fallback for browsers without the Highlight API: whole leaf element. */
+[data-ff-mask] {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  background-color: rgba(128, 128, 128, 0.35) !important;
+  border-radius: 3px;
+  user-select: none !important;
+}
+[data-ff-mask] * {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}

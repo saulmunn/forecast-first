@@ -1,0 +1,79 @@
+{
+  "manifest_version": 3,
+  "name": "Forecast First",
+  "version": "0.4.0",
+  "description": "Hides the market price / community forecast on Polymarket, Kalshi and Metaculus until you record your own forecast. Logs each forecast to Fatebook.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://gamma-api.polymarket.com/*",
+    "https://api.elections.kalshi.com/*",
+    "https://fatebook.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://polymarket.com/*",
+        "https://*.polymarket.com/*",
+        "https://polymarket.us/*",
+        "https://*.polymarket.us/*",
+        "https://kalshi.com/*",
+        "https://*.kalshi.com/*",
+        "https://metaculus.com/*",
+        "https://*.metaculus.com/*"
+      ],
+      "css": [
+        "content/blind.css"
+      ],
+      "js": [
+        "content/common.js",
+        "content/sites/polymarket.js",
+        "content/sites/kalshi.js",
+        "content/sites/metaculus.js",
+        "content/main.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://polymarket.com/*",
+        "https://*.polymarket.com/*",
+        "https://polymarket.us/*",
+        "https://*.polymarket.us/*",
+        "https://kalshi.com/*",
+        "https://*.kalshi.com/*",
+        "https://metaculus.com/*",
+        "https://*.metaculus.com/*"
+      ],
+      "js": [
+        "content/nav-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Forecast First",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
