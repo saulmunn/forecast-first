@@ -6,7 +6,7 @@
   if (FF.commonLoaded) return;
   FF.commonLoaded = true;
 
-  FF.VERSION = '0.5.2';
+  FF.VERSION = '0.5.3';
   FF.adapters = [];
   FF.registerAdapter = (adapter) => FF.adapters.push(adapter);
 
@@ -662,6 +662,26 @@
       };
       for (const [k, name] of Object.entries(map)) host.style.setProperty('--ff-' + name, String(T[k]));
     }
+    // Inputs that replace the numbers of one list share an edge, so "9%" and "20%" don't jitter them:
+    // whichever edge the site aligns the numbers on (Kalshi: left) is the edge the inputs keep.
+    function alignSlots() {
+      const groups = new Map();
+      for (const [t, slot] of slots) {
+        slot.align = null;
+        const g = slot.kind === 'pct' && slot.row && slot.row.parentElement;
+        if (!g || !t.isConnected) continue;
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push({ slot, r: t.getBoundingClientRect() });
+      }
+      for (const list of groups.values()) {
+        const seen = list.filter((x) => x.r.width >= 2);
+        if (seen.length < 2) continue;
+        const lefts = seen.map((x) => x.r.left), rights = seen.map((x) => x.r.right);
+        const spreadL = Math.max(...lefts) - Math.min(...lefts), spreadR = Math.max(...rights) - Math.min(...rights);
+        const align = spreadL <= 2 && spreadL <= spreadR ? 'left' : spreadR <= 2 ? 'right' : null;
+        for (const x of list) x.slot.align = align;
+      }
+    }
     function placeSlot(slot, target, hr) {
       const r = target.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) { slot.el.style.display = 'none'; return; }
@@ -678,7 +698,7 @@
         left = r.left + r.width - w; top = r.top + (r.height - hgt) / 2;
         // a number at the left of its row (Manifold) keeps its left edge instead of growing leftwards
         const row = slot.row && slot.row.isConnected ? slot.row.getBoundingClientRect() : null;
-        if (row && r.left - row.left < row.width * 0.35) left = r.left;
+        if (slot.align === 'left' || (!slot.align && row && r.left - row.left < row.width * 0.35)) left = r.left;
       }
       slot.el.style.width = w + 'px';
       slot.el.style.height = hgt + 'px';
@@ -815,6 +835,7 @@
         if (!t.isConnected) { el.remove(); covers.delete(t); continue; }
         placeCover(el, t, hr);
       }
+      alignSlots();
       for (const [t, slot] of slots) {
         if (!t.isConnected) { slot.el.remove(); slots.delete(t); continue; }
         placeSlot(slot, t, hr);

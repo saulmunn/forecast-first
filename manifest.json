@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Forecast First",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Hides the market price / community forecast on Polymarket, Kalshi, Metaculus and Manifold until you record your own forecast. Logs each forecast to Fatebook.",
   "permissions": [
     "storage"
