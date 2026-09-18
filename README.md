@@ -4,6 +4,9 @@ A Chrome extension that makes you guess before you look.
 
 On **Polymarket**, **Kalshi**, **Metaculus** and **Manifold** it hides the market price / community forecast (the big percentage, the price chart, the Yes/No price buttons, the order book) until you've written down your own number. After you submit, the page is revealed and a card tells you whether you were higher or lower than the market, and lets you jot down why. Every forecast is also logged to **Fatebook** through its API.
 
+<img width="717" height="483" alt="image" src="https://github.com/user-attachments/assets/e007b14b-679a-4830-b60f-f0a9e10fd80b" />
+
+
 ## Install (unpacked)
 
 1. Get the code: `git clone https://github.com/saulmunn/forecast-first.git` (or download the ZIP from GitHub and unpack it).
